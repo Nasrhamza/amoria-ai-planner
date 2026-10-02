@@ -1,0 +1,56 @@
+# Gradle
+.gradle/
+build/
+
+# Local config
+local.properties
+
+# Android Studio
+.idea/
+*.iml
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Generated
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Keystore
+*.jks
+*.keystore
+keystore.properties
+signing/
+# JVM Heap Dumps
+*.hprof
+
+
+# Local configuration and generated files
+.env
+.env.*
+node_modules/
+.venv/
+__pycache__/
+build/
+dist/
+target/
+.next*/
+.angular/
+.gradle/
+*.log
+*.db
+*.sqlite*
+*.pem
+*.key
+*.jks
+keystore.properties
+local.properties
+google-services.json
+
+!licensing/public.key
+!config/public.key

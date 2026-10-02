@@ -1,0 +1,214 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function activeUser() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && currentUserDoc().data.isBlocked != true;
+    }
+
+    function isAdmin() {
+      return activeUser()
+        && currentUserDoc().data.role == "admin"
+        && currentUserDoc().data.get("mustChangePassword", false) != true;
+    }
+
+    function featureEnabled(fieldName) {
+      return !exists(/databases/$(database)/documents/app_config/features)
+        || get(/databases/$(database)/documents/app_config/features).data
+          .get(fieldName, true) != false;
+    }
+
+    function roomHost(roomId) {
+      return activeUser() &&
+        get(/databases/$(database)/documents/friend_rooms/$(roomId)).data.hostUid == request.auth.uid;
+    }
+
+    function roomMember(roomId) {
+      return activeUser()
+        && exists(
+          /databases/$(database)/documents/friend_rooms/$(roomId)/members/$(request.auth.uid)
+        );
+    }
+
+    match /users/{userId} {
+      allow get: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if request.resource.data.uid == userId
+        && request.resource.data.isBlocked == false
+        && (
+          (
+            isAdmin()
+            && request.resource.data.role in ["user", "admin"]
+            && request.resource.data.get("mustChangePassword", false)
+              == (request.resource.data.role == "admin")
+          )
+          || (
+            signedIn()
+            && request.auth.uid == userId
+            && request.resource.data.role == "user"
+            && request.resource.data.get("mustChangePassword", false) == false
+            && request.resource.data.email == request.auth.token.email
+          )
+        );
+
+      allow update: if (
+          isAdmin()
+          && request.resource.data.get("uid", userId) == userId
+          && resource.data.get("uid", userId) == userId
+          && (
+            request.auth.uid != userId
+            || (
+              request.resource.data.role == resource.data.role
+              && request.resource.data.isBlocked == resource.data.isBlocked
+            )
+          )
+        )
+        || (
+          activeUser()
+          && request.auth.uid == userId
+          && request.resource.data.get("uid", userId) == userId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isBlocked == resource.data.isBlocked
+          && (
+            request.resource.data.get("mustChangePassword", false)
+              == resource.data.get("mustChangePassword", false)
+            || (
+              resource.data.get("mustChangePassword", false) == true
+              && request.resource.data.get("mustChangePassword", false) == false
+            )
+          )
+        );
+
+      allow delete: if isAdmin() || (activeUser() && request.auth.uid == userId);
+    }
+
+    match /profiles/{userId} {
+      allow get, list: if activeUser() && (request.auth.uid == userId || isAdmin());
+      allow create, update, delete: if activeUser()
+        && (request.auth.uid == userId || isAdmin());
+    }
+
+    match /friend_rooms/{roomId} {
+      allow get, list: if activeUser();
+      allow create: if activeUser()
+        && (isAdmin() || featureEnabled("friendsRoomsEnabled"))
+        && request.resource.data.hostUid == request.auth.uid;
+      allow update: if isAdmin()
+        || roomHost(roomId)
+        || (
+          activeUser()
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(["memberCount"])
+          && (
+            (
+              request.resource.data.memberCount == resource.data.memberCount + 1
+              && !exists(
+                /databases/$(database)/documents/friend_rooms/$(roomId)/members/$(request.auth.uid)
+              )
+              && existsAfter(
+                /databases/$(database)/documents/friend_rooms/$(roomId)/members/$(request.auth.uid)
+              )
+            )
+            || (
+              request.resource.data.memberCount == resource.data.memberCount - 1
+              && exists(
+                /databases/$(database)/documents/friend_rooms/$(roomId)/members/$(request.auth.uid)
+              )
+              && !existsAfter(
+                /databases/$(database)/documents/friend_rooms/$(roomId)/members/$(request.auth.uid)
+              )
+            )
+          )
+        );
+      allow delete: if isAdmin() || roomHost(roomId);
+
+      match /members/{memberId} {
+        allow get, list: if isAdmin() || roomHost(roomId) || roomMember(roomId);
+        allow create: if activeUser()
+          && (isAdmin() || featureEnabled("friendsRoomsEnabled"))
+          && (
+            isAdmin()
+            || roomHost(roomId)
+            || (request.auth.uid == memberId && request.resource.data.uid == request.auth.uid)
+          );
+        allow update: if activeUser()
+          && (
+            isAdmin()
+            || roomHost(roomId)
+            || (
+              request.auth.uid == memberId
+              && resource.data.uid == request.auth.uid
+              && request.resource.data.uid == request.auth.uid
+              && request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(["hasFinishedQuiz"])
+            )
+          );
+        allow delete: if activeUser()
+          && (
+            isAdmin()
+            || roomHost(roomId)
+            || request.auth.uid == memberId
+          );
+      }
+
+      match /quiz_answers/{answerId} {
+        allow get, list: if isAdmin() || roomHost(roomId) || roomMember(roomId);
+        allow create, update: if activeUser()
+          && (
+            isAdmin()
+            || roomHost(roomId)
+            || (
+              request.auth.uid == answerId
+              && request.resource.data.uid == request.auth.uid
+            )
+          );
+        allow delete: if activeUser()
+          && (
+            isAdmin()
+            || roomHost(roomId)
+            || request.auth.uid == answerId
+          );
+      }
+
+      match /suggestions/{suggestionId} {
+        allow get, list: if isAdmin() || roomHost(roomId) || roomMember(roomId);
+        allow create, update, delete: if activeUser()
+          && (
+            isAdmin()
+            || roomHost(roomId)
+          );
+      }
+    }
+
+    match /invite_codes/{userId} {
+      allow get, list: if activeUser() && (request.auth.uid == userId || isAdmin());
+      allow create, update, delete: if activeUser()
+        && (request.auth.uid == userId || isAdmin());
+    }
+
+    match /couples/{coupleId} {
+      allow get, list: if activeUser();
+      allow create, update, delete: if activeUser();
+    }
+
+    match /app_config/{configId} {
+      allow get: if activeUser();
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
